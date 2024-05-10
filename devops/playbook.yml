@@ -1,0 +1,85 @@
+---
+- name: Deploy Next.js Docker container
+  hosts: all
+  become: yes
+  vars:
+    IMAGE_NAME: "{{ image_name }}"
+    DOCKERHUB_USERNAME: "{{ dockerhub_username }}"
+    DOCKERHUB_TOKEN: "{{ dockerhub_token }}"
+    DOMAIN_NAME: "{{ domain_name }}"
+
+  tasks:
+    - name: Run Apt update
+      apt:
+        update_cache: yes
+
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+
+    - name: Start Docker service
+      service:
+        name: docker
+        state: started
+
+    - name: Install Nginx
+      apt:
+        name: nginx
+        state: present
+
+    - name: Start Nginx service
+      service:
+        name: nginx
+        state: started
+
+    - name: Login to Docker Hub with token
+      docker_login:
+        username: "{{ DOCKERHUB_USERNAME }}"
+        password: "{{ DOCKERHUB_TOKEN }}"
+
+    - name: Pull Docker image
+      docker_image:
+        name: "{{ IMAGE_NAME }}"
+        source: pull
+
+    - name: Run Docker container
+      docker_container:
+        name: nextjs_container
+        image: "{{ IMAGE_NAME }}"
+        state: started
+        restart_policy: always
+        ports:
+          - "3001:3000"
+
+    - name: Wait for container to start
+      wait_for:
+        host: localhost
+        port: 3001
+        delay: 5
+        timeout: 60
+
+    - name: Check if Nginx config file exists
+      stat:
+        path: "/etc/nginx/sites-available/{{ DOMAIN_NAME }}"
+      register: nginx_config
+
+    - name: Configure Nginx
+      template:
+        src: nginx.conf.j2
+        dest: "/etc/nginx/sites-available/{{ DOMAIN_NAME }}"
+      when: not nginx_config.stat.exists
+
+    - name: Enable Nginx site
+      file:
+        src: "/etc/nginx/sites-available/{{ DOMAIN_NAME }}"
+        dest: "/etc/nginx/sites-enabled/{{ DOMAIN_NAME }}"
+        state: link
+      when: not nginx_config.stat.exists
+      notify: Reload Nginx
+
+  handlers:
+    - name: Reload Nginx
+      service:
+        name: nginx
+        state: reloaded

@@ -1,0 +1,70 @@
+name: Build and Push Docker Image
+
+env:
+  SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  
+  SSH_USER: ${{ vars.SSH_USER }}
+  TARGET_HOST: ${{ vars.SSH_HOST }}
+  IMAGE_NAME: ${{ vars.IMAGE_NAME }}
+  DOMAIN_NAME: ${{ vars.DOMAIN_NAME }}
+
+on:
+  push:
+    branches:
+      - develop
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Login to Docker Hub with token
+        run: |
+          echo $DOCKERHUB_TOKEN | docker login -u $DOCKERHUB_USERNAME --password-stdin
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t $IMAGE_NAME:latest .
+          docker push $IMAGE_NAME:latest
+
+    
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v2
+
+      - name: Create SSH key
+        run: |
+          echo "$SSH_PRIVATE_KEY" > private.key
+          sudo chmod 400 private.key
+          eval `ssh-agent -s`
+          ssh-add private.key
+          mkdir -p ~/.ssh
+          touch ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+          ssh-keyscan -H $TARGET_HOST >> ~/.ssh/known_hosts
+
+      - name: Set up Ansible
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ansible
+
+      - name: Creae inventory file
+        run: |
+          echo "server ansible_host=$TARGET_HOST ansible_user=$SSH_USER ansible_ssh_private_key_file=private.key" > inventory
+
+      - name: Deploy with Ansible
+        run: |
+          ansible-playbook -i inventory \
+          --extra-vars "image_name=$IMAGE_NAME" \
+          --extra-vars "domain_name=$DOMAIN_NAME" \
+          --extra-vars "dockerhub_username=$DOCKERHUB_USERNAME" \
+          --extra-vars "dockerhub_token=$DOCKERHUB_TOKEN" \
+          --extra-vars "ansible_ssh_common_args='-o StrictHostKeyChecking=no'" \
+          devops/playbook.yml
